@@ -481,7 +481,6 @@ h1,h2,h3{font-family:var(--display);font-weight:400;margin:0;text-wrap:balance}
       </ol>
     </div>
     <div class="row" id="authBtns">
-      <button class="big" id="resumeBtn" type="button" hidden style="flex-basis:100%;max-width:420px">이어하기</button>
       <button class="big" id="showNew" type="button">새 프로필 만들기</button>
       <button class="big alt" id="showLogin" type="button">기존 프로필 로그인</button>
     </div>
@@ -496,10 +495,9 @@ h1,h2,h3{font-family:var(--display);font-weight:400;margin:0;text-wrap:balance}
     <div class="auth" id="loginForm" hidden>
       <h3>기존 프로필 로그인</h3>
       <div class="plist" id="plist"></div>
-      <label>내 이름<input class="name-in" id="lName" maxlength="10" placeholder="예: 하은"></label>
-      <label>비밀번호 (숫자 4자리)<input class="name-in" id="lPin" type="password" inputmode="numeric" maxlength="4" autocomplete="off"></label>
+      <label id="pinWrap" hidden>비밀번호<input class="name-in" id="lPin" type="password" inputmode="numeric" maxlength="4" autocomplete="off"></label>
       <div class="auth-msg" id="lMsg"></div>
-      <div class="row"><button class="big" id="loginBtn" type="button">로그인</button><button class="chip" id="lBack" type="button">뒤로</button></div>
+      <div class="row"><button class="big" id="loginBtn" type="button" hidden>로그인</button><button class="chip" id="lBack" type="button">뒤로</button></div>
     </div>
   </section>
 
@@ -637,9 +635,6 @@ h1,h2,h3{font-family:var(--display);font-weight:400;margin:0;text-wrap:balance}
   </div>
 </div>
 
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
 (() => {
 const $ = s => document.querySelector(s);
@@ -865,15 +860,11 @@ let S=null, R=null, G=null, last=0, paused=false, soundOn=true, actx=null, tab='
 const fresh=name=>({cafe:name, day:1, money:15000, total:0, stock:{beans:12,milk:12,cups:15},
   menu:['ame_h','ame_i','latte_h'], machine:0, deco:{wall:'stripe',counter:'wood',light:'pendant',items:[]},
   owned:['wall:stripe','counter:wood','light:pendant'], scores:[], dreamShown:false});
-let ME=null, MYNAME='', saveTimer=null, fbAuth=null, fbDb=null;
-const FB_CFG={apiKey:"AIzaSyApRZGeO-oKr_e0TDrdCiZKJ2PwC2poOV8",authDomain:"cafe-game-dcebc.firebaseapp.com",projectId:"cafe-game-dcebc",storageBucket:"cafe-game-dcebc.firebasestorage.app",messagingSenderId:"725542217529",appId:"1:725542217529:web:b75ef19b4ab0d06c3c2ae8"};
-try{ firebase.initializeApp(FB_CFG); fbAuth=firebase.auth(); fbDb=firebase.firestore(); }catch(e){}
-const nameEmail=n=>'u'+Array.from(new TextEncoder().encode(n)).map(b=>b.toString(16).padStart(2,'0')).join('')+'@cafe-game.app';
-const pinPw=p=>'cafe-'+p+'-mlc';
-function writeSave(){ if(!ME||!S||!fbDb) return Promise.resolve();
-  return fbDb.collection('players').doc(ME).set({name:MYNAME,save:JSON.stringify(S),updated:firebase.firestore.FieldValue.serverTimestamp()},{merge:true}); }
-function save(){ if(!ME||!S||!fbDb) return; clearTimeout(saveTimer); saveTimer=setTimeout(()=>{ writeSave().catch(()=>{}); },600); }
-
+const PROF_KEY='my-little-cafe-profiles'; let ME=null, pickId=null;
+function getProfiles(){ try{ return JSON.parse(localStorage.getItem(PROF_KEY)||'{}'); }catch(e){ return {}; } }
+function setProfiles(o){ try{ localStorage.setItem(PROF_KEY,JSON.stringify(o)); }catch(e){} }
+function save(){ if(!ME||!S) return; const ps=getProfiles(); if(ps[ME]){ ps[ME].save=S; setProfiles(ps); } }
+function load(){ const ps=getProfiles(); return ME&&ps[ME]?ps[ME].save:null; }
 
 /* ================= 소리 ================= */
 function beep(freqs,dur=0.09,type='sine'){
@@ -1357,58 +1348,42 @@ $('#openBtn').addEventListener('click',()=>{ save(); startDay(); });
 $('#soundBtn').addEventListener('click',()=>{ soundOn=!soundOn; $('#soundBtn').textContent=soundOn?'소리 켜짐':'소리 꺼짐'; });
 $('#pauseBtn').addEventListener('click',()=>{ paused=true; $('#pauseCover').hidden=false; });
 $('#resumeBtn').addEventListener('click',()=>{ paused=false; last=performance.now(); $('#pauseCover').hidden=true; });
-/* ================= 프로필 (Firebase) ================= */
-const KNOWN_KEY='my-little-cafe-names';
-const known=()=>{ try{ return JSON.parse(localStorage.getItem(KNOWN_KEY)||'[]'); }catch(e){ return []; } };
-const remember=n=>{ try{ const k=known().filter(x=>x!==n); k.unshift(n); localStorage.setItem(KNOWN_KEY,JSON.stringify(k.slice(0,6))); }catch(e){} };
+/* ================= 프로필 ================= */
 const authShow=w=>{ $('#authBtns').hidden=w!=='btns'; $('#newForm').hidden=w!=='new'; $('#loginForm').hidden=w!=='login'; };
-const fbErr=e=>{ const c=(e&&e.code)||''; if(c.includes('network')) return '인터넷 연결을 확인해 주세요.'; if(c.includes('too-many')) return '너무 많이 시도했어요. 잠시 뒤에 다시 해 주세요.'; return '문제가 생겼어요. 다시 해 주세요.'; };
-function busy(btn,on,label){ btn.disabled=on; if(on){ btn.dataset.l=btn.textContent; btn.textContent=label; } else if(btn.dataset.l) btn.textContent=btn.dataset.l; }
-async function enter(uid,fallbackName){
-  ME=uid; const doc=await fbDb.collection('players').doc(uid).get(); const d=doc.exists?doc.data():{};
-  MYNAME=d.name||fallbackName; S=d.save?JSON.parse(d.save):fresh('나의 작은 카페'); remember(MYNAME); sfx.coin();
-  if(S.day===1&&!S.scores.length) startDay(); else openPrep();
-}
 $('#showNew').addEventListener('click',()=>{ authShow('new'); $('#nMsg').textContent=''; $('#nName').focus(); });
-$('#showLogin').addEventListener('click',()=>{ authShow('login'); renderPlist(); $('#lName').focus(); });
+$('#showLogin').addEventListener('click',()=>{ authShow('login'); renderPlist(); });
 $('#nBack').addEventListener('click',()=>authShow('btns'));
 $('#lBack').addEventListener('click',()=>authShow('btns'));
-$('#newBtn').addEventListener('click',async()=>{
-  const btn=$('#newBtn'), name=$('#nName').value.trim(), cafe=$('#cafeName').value.trim()||'나의 작은 카페', pin=$('#nPin').value, msg=$('#nMsg');
+$('#newBtn').addEventListener('click',()=>{
+  const name=$('#nName').value.trim(), cafe=$('#cafeName').value.trim()||'나의 작은 카페', pin=$('#nPin').value, msg=$('#nMsg');
   if(!name){ msg.textContent='이름을 적어 주세요.'; return; }
   if(!/^[0-9]{4}$/.test(pin)){ msg.textContent='비밀번호는 숫자 4자리로 해 주세요.'; return; }
-  if(!fbAuth){ msg.textContent='인터넷에 연결해야 프로필을 만들 수 있어요.'; return; }
-  msg.textContent=''; busy(btn,true,'만드는 중…');
-  try{
-    const cred=await fbAuth.createUserWithEmailAndPassword(nameEmail(name),pinPw(pin));
-    ME=cred.user.uid; MYNAME=name; S=fresh(cafe); remember(name);
-    await writeSave(); busy(btn,false); sfx.coin(); startDay();
-  }catch(e){ busy(btn,false); msg.textContent=e.code==='auth/email-already-in-use'?'이미 있는 이름이에요. 다른 이름을 쓰거나 로그인해 주세요.':fbErr(e); }
+  const ps=getProfiles();
+  if(Object.values(ps).some(p=>p.name===name)){ msg.textContent='이미 있는 이름이에요. 다른 이름을 써 주세요.'; return; }
+  const id='p'+Date.now(); ps[id]={name,pin,save:null}; setProfiles(ps);
+  ME=id; S=fresh(cafe); save(); sfx.coin(); startDay();
 });
 function renderPlist(){
-  const box=$('#plist'); box.innerHTML=''; $('#lMsg').textContent=''; $('#lPin').value='';
-  known().forEach(n=>{ const b=document.createElement('button'); b.type='button'; b.className='pbtn';
-    const av=document.createElement('span'); av.className='pav'; av.textContent=n.slice(0,1);
-    const t=document.createElement('span'); t.textContent=n; const sm=document.createElement('small'); sm.textContent='이 기기에서 했던 프로필'; t.appendChild(sm);
-    b.append(av,t); b.addEventListener('click',()=>{ $('#lName').value=n; [...box.children].forEach(x=>x.classList.remove('on')); b.classList.add('on'); $('#lPin').focus(); });
+  const ps=getProfiles(), box=$('#plist'); box.innerHTML=''; pickId=null;
+  $('#pinWrap').hidden=true; $('#loginBtn').hidden=true; $('#lMsg').textContent='';
+  const ids=Object.keys(ps);
+  if(!ids.length){ box.innerHTML='<p class="lead" style="text-align:center">아직 프로필이 없어요. 새 프로필을 먼저 만들어 주세요.</p>'; return; }
+  ids.forEach(id=>{ const p=ps[id]; const b=document.createElement('button'); b.type='button'; b.className='pbtn';
+    const av=document.createElement('span'); av.className='pav'; av.textContent=p.name.slice(0,1);
+    const t=document.createElement('span'); t.textContent=p.name; const sm=document.createElement('small'); sm.textContent=p.save?p.save.cafe+' · '+p.save.day+'일째':'새 카페'; t.appendChild(sm);
+    b.append(av,t);
+    b.addEventListener('click',()=>{ pickId=id; [...box.children].forEach(x=>x.classList.remove('on')); b.classList.add('on');
+      $('#pinWrap').hidden=false; $('#loginBtn').hidden=false; $('#lPin').value=''; $('#lMsg').textContent=''; $('#lPin').focus(); });
     box.appendChild(b); });
 }
-$('#loginBtn').addEventListener('click',async()=>{
-  const btn=$('#loginBtn'), name=$('#lName').value.trim(), pin=$('#lPin').value, msg=$('#lMsg');
-  if(!name||!/^[0-9]{4}$/.test(pin)){ msg.textContent='이름과 비밀번호 4자리를 적어 주세요.'; return; }
-  if(!fbAuth){ msg.textContent='인터넷에 연결해야 로그인할 수 있어요.'; return; }
-  msg.textContent=''; busy(btn,true,'로그인 중…');
-  try{ const cred=await fbAuth.signInWithEmailAndPassword(nameEmail(name),pinPw(pin)); await enter(cred.user.uid,name); busy(btn,false); }
-  catch(e){ busy(btn,false); const c=e.code||''; msg.textContent=/invalid|wrong|not-found/.test(c)?'이름이나 비밀번호가 달라요.':fbErr(e); $('#lPin').value=''; sfx.no(); }
+$('#loginBtn').addEventListener('click',()=>{
+  const p=getProfiles()[pickId]; if(!p) return;
+  if($('#lPin').value!==p.pin){ $('#lMsg').textContent='비밀번호가 달라요. 다시 눌러 주세요.'; $('#lPin').value=''; sfx.no(); return; }
+  ME=pickId; sfx.coin();
+  if(p.save){ S=p.save; openPrep(); } else { S=fresh('나의 작은 카페'); save(); startDay(); }
 });
 $('#lPin').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#loginBtn').click(); });
-$('#resumeBtn').addEventListener('click',async()=>{ const u=fbAuth&&fbAuth.currentUser; if(!u) return; const btn=$('#resumeBtn'); busy(btn,true,'불러오는 중…');
-  try{ await enter(u.uid,''); }catch(e){ $('#resumeBtn').hidden=true; } busy(btn,false); });
-if(fbAuth) fbAuth.onAuthStateChanged(async u=>{ const rb=$('#resumeBtn');
-  if(u&&!ME){ try{ const d=(await fbDb.collection('players').doc(u.uid).get()).data()||{}; rb.textContent=(d.name||'내 프로필')+' 이어하기'; rb.hidden=false; }catch(e){ rb.hidden=true; } }
-  else rb.hidden=true; });
-$('#logoutBtn').addEventListener('click',async()=>{ clearTimeout(saveTimer); try{ await writeSave(); }catch(e){} try{ await fbAuth.signOut(); }catch(e){}
-  ME=null; S=null; R=null; G=null; P=null; paused=false; $('#pauseCover').hidden=true; show('scrStart'); authShow('btns'); });
+$('#logoutBtn').addEventListener('click',()=>{ save(); ME=null; S=null; R=null; G=null; P=null; paused=false; $('#pauseCover').hidden=true; show('scrStart'); authShow('btns'); });
 startScene();
 })();
 </script>
